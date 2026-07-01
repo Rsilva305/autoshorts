@@ -206,13 +206,18 @@ if __name__ == "__main__":
     let output_json_path_str = output_json_path.to_string_lossy().to_string();
 
     tokio::task::spawn_blocking(move || {
-        let output = std::process::Command::new("python3")
+        let python_cmd = if std::process::Command::new("python3").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+            "python3"
+        } else {
+            "python"
+        };
+        let output = std::process::Command::new(python_cmd)
             .arg(&script_path_str)
             .arg(&audio_path)
             .arg(&output_json_path_str)
-            .arg("base") // default model size
+            .arg("base")
             .output()
-            .context("executing python3 transcribe.py")?;
+            .context("executing python transcribe.py")?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();

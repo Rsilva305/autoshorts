@@ -21,6 +21,7 @@ pub struct MediaProbe {
     pub has_video: bool,
     pub width: Option<i64>,
     pub height: Option<i64>,
+    pub fps: Option<f64>,
     pub video_codec: Option<String>,
     pub audio_codec: Option<String>,
 }

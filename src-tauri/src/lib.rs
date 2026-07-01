@@ -35,7 +35,8 @@ async fn environment_status(state: tauri::State<'_, AppState>) -> Result<Environ
         .unwrap_or_else(|_| "deepseek".to_string())
         .to_lowercase();
 
-    let has_local_whisper_model = std::process::Command::new("python3")
+    let python_cmd = media::python_cmd();
+    let has_local_whisper_model = std::process::Command::new(python_cmd)
         .args(["-c", "import whisper"])
         .output()
         .map(|out| out.status.success())
@@ -373,7 +374,7 @@ async fn transcribe_project(
                 .map_err(to_command_error)?
         }
         "local" => {
-            let has_python_whisper = std::process::Command::new("python3")
+            let has_python_whisper = std::process::Command::new(media::python_cmd())
                 .args(["-c", "import whisper"])
                 .output()
                 .map(|out| out.status.success())
@@ -520,6 +521,7 @@ fn render_flat_clip_for_candidate(
     let mut drawtext_filters = None;
 
     let probe = media::probe_media(&project.source_path).ok();
+    let source_fps = probe.as_ref().and_then(|p| p.fps).unwrap_or(30.0);
     let cropped_width = if let Some(p) = &probe {
         let iw = p.width.unwrap_or(1920) as f64;
         let ih = p.height.unwrap_or(1080) as f64;
@@ -528,6 +530,14 @@ fn render_flat_clip_for_candidate(
     } else {
         1080
     };
+
+    // Run face tracking; silently fall back to center crop on any error
+    let face_keyframes = media::run_face_tracker(
+        &project.source_path,
+        candidate.start_sec,
+        candidate.end_sec,
+        &project_dir(&state, &project.id),
+    ).ok();
 
     if let Ok(Some(transcript_record)) = state.db.latest_transcript(&project.id) {
         if let Ok(normalized) = serde_json::from_str::<NormalizedTranscript>(&transcript_record.raw_json) {
@@ -550,12 +560,15 @@ fn render_flat_clip_for_candidate(
         }
     }
 
+    let face_track_arg = face_keyframes.as_deref().map(|kf| (kf, source_fps));
+
     match media::render_flat_clip(
         &project.source_path,
         candidate.start_sec,
         candidate.end_sec,
         &output_path,
         drawtext_filters.as_deref(),
+        face_track_arg,
     ) {
         Ok(path) => {
             let path_string = path.to_string_lossy().to_string();
@@ -574,12 +587,13 @@ fn render_flat_clip_for_candidate(
         }
         Err(error) => {
             let err_msg = error.to_string();
-            // Fallback retry rendering without captions overlay on any error
+            // Fallback retry rendering without captions or face tracking on any error
             match media::render_flat_clip(
                 &project.source_path,
                 candidate.start_sec,
                 candidate.end_sec,
                 &output_path,
+                None,
                 None,
             ) {
                 Ok(path) => {
@@ -874,7 +888,7 @@ fn build_drawtext_filters(
         let mut font_option = String::new();
         for path in &font_paths {
             if std::path::Path::new(path).exists() {
-                font_option = format!("fontfile='{}':", path.replace(':', "\:"));
+                font_option = format!("fontfile='{}':", path.replace(':', r"\:"));
                 break;
             }
         }
