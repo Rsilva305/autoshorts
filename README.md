@@ -21,6 +21,25 @@ This repository implements the desktop app foundation using **Tauri 2 + React + 
 
 ---
 
+## Best Use Cases
+
+AutoShorts is built around one core assumption: **the best moments are in what's said, not what's shown.** Moment detection runs entirely off the transcript, so it works best on long-form spoken content:
+
+- **Podcasts** (especially 2-person) — the face-tracking auto-crop follows whichever speaker is talking
+- **Interviews**
+- **Talking-head YouTube content** — vlogs, commentary, reaction videos
+- **Webinars, recorded presentations, and lectures** with a visible speaker
+
+The moment-ranking AI favors **concrete stories, strong opinions, emotional turns, surprising or counter-intuitive claims, and clear payoffs** — opinionated or narrative talking clips better than flat technical explanation.
+
+**Less suited for:**
+- Silent or dialogue-free footage (b-roll, music, action/nature shots) — no speech means nothing for the transcript-based ranking to work with
+- Panels/roundtables with 3+ people on screen at once — face tracking follows up to two speakers
+- Gaming or sports highlights — no gameplay-event or audio-spike detection, purely transcript-driven
+- Cinematic or trailer-style edits — no visual shot analysis
+
+---
+
 ## Prerequisites
 
 To run the application, **FFmpeg & FFprobe** must be installed and available on your system `PATH` to handle cropping, audio extraction, and dynamic captions:
