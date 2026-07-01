@@ -4,7 +4,6 @@ use serde_json::json;
 
 use crate::models::{CandidateDraft, NormalizedTranscript, TranscriptSegment};
 
-
 #[derive(Debug, Deserialize)]
 struct AnthropicMessage {
     content: Vec<AnthropicContent>,
@@ -77,6 +76,223 @@ Avoid rambling setup, context-dependent references, and pure filler. Return up t
         .first()
         .map(|c| c.message.content.clone())
         .ok_or_else(|| anyhow!("DeepSeek response did not include choices content"))?;
+
+    let min_duration = if transcript.duration < 60.0 {
+        (transcript.duration * 0.5).max(5.0)
+    } else {
+        30.0
+    };
+    parse_candidate_json(&text, min_duration)
+}
+
+#[derive(Debug, Deserialize)]
+struct GeminiResponse {
+    candidates: Vec<GeminiCandidate>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GeminiCandidate {
+    content: GeminiContent,
+}
+
+#[derive(Debug, Deserialize)]
+struct GeminiContent {
+    parts: Vec<GeminiPart>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GeminiPart {
+    text: Option<String>,
+}
+
+pub async fn detect_candidates_with_gemini(
+    transcript: &NormalizedTranscript,
+    api_key: &str,
+) -> Result<Vec<CandidateDraft>> {
+    let segments = compact_segments(&transcript.segments);
+    let prompt = format!(
+        "You are identifying the most viral moments and strongest short-form clip candidates from a long-form transcript. \
+For each candidate, the clip must be self-contained, starting with an extremely engaging hook within the first 3 seconds (to capture immediate attention on social feeds), \
+30-90 seconds long, and cut at clean sentence/thought boundaries. Favor highly shareable content: concrete stories, \
+strong opinions, emotional turns, surprising or counter-intuitive claims, clear payoffs, and high-energy/dramatic peaks. \
+Avoid rambling setup, context-dependent references, and pure filler. Return up to 10 candidates as JSON matching this schema: \
+{{\"candidates\":[{{\"start\":0.0,\"end\":0.0,\"score\":0.0,\"hook\":\"...\",\"rationale\":\"...\"}}]}}\n\nTranscript:\n{segments}"
+    );
+
+    let model = std::env::var("GEMINI_MODEL").unwrap_or_else(|_| "gemini-2.5-flash".to_string());
+    let url = format!(
+        "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
+        model, api_key
+    );
+
+    let response = reqwest::Client::new()
+        .post(&url)
+        .json(&json!({
+            "contents": [
+                {
+                    "parts": [
+                        {
+                            "text": prompt
+                        }
+                    ]
+                }
+            ],
+            "generationConfig": {
+                "responseMimeType": "application/json",
+                "temperature": 0.2
+            }
+        }))
+        .send()
+        .await
+        .context("calling Gemini")?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(anyhow!("Gemini request failed ({status}): {body}"));
+    }
+
+    let res_body: GeminiResponse = response.json().await.context("parsing Gemini response")?;
+    let text = res_body
+        .candidates
+        .first()
+        .and_then(|c| c.content.parts.first())
+        .and_then(|p| p.text.clone())
+        .ok_or_else(|| anyhow!("Gemini response did not include content text"))?;
+
+    let min_duration = if transcript.duration < 60.0 {
+        (transcript.duration * 0.5).max(5.0)
+    } else {
+        30.0
+    };
+    parse_candidate_json(&text, min_duration)
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatCompletionResponse {
+    choices: Vec<ChatCompletionChoice>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatCompletionChoice {
+    message: ChatCompletionMessage,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatCompletionMessage {
+    content: String,
+}
+
+pub async fn detect_candidates_with_openai(
+    transcript: &NormalizedTranscript,
+    api_key: &str,
+) -> Result<Vec<CandidateDraft>> {
+    let segments = compact_segments(&transcript.segments);
+    let prompt = format!(
+        "You are identifying the most viral moments and strongest short-form clip candidates from a long-form transcript. \
+For each candidate, the clip must be self-contained, starting with an extremely engaging hook within the first 3 seconds (to capture immediate attention on social feeds), \
+30-90 seconds long, and cut at clean sentence/thought boundaries. Favor highly shareable content: concrete stories, \
+strong opinions, emotional turns, surprising or counter-intuitive claims, clear payoffs, and high-energy/dramatic peaks. \
+Avoid rambling setup, context-dependent references, and pure filler. Return up to 10 candidates as JSON matching this schema: \
+{{\"candidates\":[{{\"start\":0.0,\"end\":0.0,\"score\":0.0,\"hook\":\"...\",\"rationale\":\"...\"}}]}}\n\nTranscript:\n{segments}"
+    );
+
+    let model = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
+
+    let response = reqwest::Client::new()
+        .post("https://api.openai.com/v1/chat/completions")
+        .header("Authorization", format!("Bearer {api_key}"))
+        .json(&json!({
+            "model": model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": prompt,
+                }
+            ],
+            "temperature": 0.2,
+            "response_format": {
+                "type": "json_object"
+            }
+        }))
+        .send()
+        .await
+        .context("calling OpenAI")?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(anyhow!("OpenAI request failed ({status}): {body}"));
+    }
+
+    let res_body: ChatCompletionResponse =
+        response.json().await.context("parsing OpenAI response")?;
+    let text = res_body
+        .choices
+        .first()
+        .map(|c| c.message.content.clone())
+        .ok_or_else(|| anyhow!("OpenAI response did not include choices content"))?;
+
+    let min_duration = if transcript.duration < 60.0 {
+        (transcript.duration * 0.5).max(5.0)
+    } else {
+        30.0
+    };
+    parse_candidate_json(&text, min_duration)
+}
+
+pub async fn detect_candidates_with_openrouter(
+    transcript: &NormalizedTranscript,
+    api_key: &str,
+) -> Result<Vec<CandidateDraft>> {
+    let segments = compact_segments(&transcript.segments);
+    let prompt = format!(
+        "You are identifying the most viral moments and strongest short-form clip candidates from a long-form transcript. \
+For each candidate, the clip must be self-contained, starting with an extremely engaging hook within the first 3 seconds (to capture immediate attention on social feeds), \
+30-90 seconds long, and cut at clean sentence/thought boundaries. Favor highly shareable content: concrete stories, \
+strong opinions, emotional turns, surprising or counter-intuitive claims, clear payoffs, and high-energy/dramatic peaks. \
+Avoid rambling setup, context-dependent references, and pure filler. Return up to 10 candidates as JSON matching this schema: \
+{{\"candidates\":[{{\"start\":0.0,\"end\":0.0,\"score\":0.0,\"hook\":\"...\",\"rationale\":\"...\"}}]}}\n\nTranscript:\n{segments}"
+    );
+
+    let model =
+        std::env::var("OPENROUTER_MODEL").unwrap_or_else(|_| "google/gemini-2.5-flash".to_string());
+
+    let response = reqwest::Client::new()
+        .post("https://openrouter.ai/api/v1/chat/completions")
+        .header("Authorization", format!("Bearer {api_key}"))
+        .json(&json!({
+            "model": model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": prompt,
+                }
+            ],
+            "temperature": 0.2,
+            "response_format": {
+                "type": "json_object"
+            }
+        }))
+        .send()
+        .await
+        .context("calling OpenRouter")?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(anyhow!("OpenRouter request failed ({status}): {body}"));
+    }
+
+    let res_body: ChatCompletionResponse = response
+        .json()
+        .await
+        .context("parsing OpenRouter response")?;
+    let text = res_body
+        .choices
+        .first()
+        .map(|c| c.message.content.clone())
+        .ok_or_else(|| anyhow!("OpenRouter response did not include choices content"))?;
 
     let min_duration = if transcript.duration < 60.0 {
         (transcript.duration * 0.5).max(5.0)
@@ -164,7 +380,7 @@ pub async fn detect_candidates_with_local_llm(
     model_name: &str,
 ) -> Result<Vec<CandidateDraft>> {
     let segments = compact_segments(&transcript.segments);
-    
+
     let system_instructions = "You are identifying the most viral moments and strongest short-form clip candidates from a long-form transcript. \
 For each candidate, the clip must be self-contained, starting with an extremely engaging hook within the first 3 seconds (to capture immediate attention on social feeds), \
 30-90 seconds long, and cut at clean sentence/thought boundaries. \
@@ -226,49 +442,16 @@ Ensure the 'start' and 'end' values correspond to actual timestamps in the trans
         return Err(anyhow!("Local Ollama request failed ({status}): {body}"));
     }
 
-    let res_body: OllamaResponse = response.json().await.context("parsing local Ollama response")?;
+    let res_body: OllamaResponse = response
+        .json()
+        .await
+        .context("parsing local Ollama response")?;
     let min_duration = if transcript.duration < 60.0 {
         (transcript.duration * 0.5).max(5.0)
     } else {
         30.0
     };
     parse_candidate_json(&res_body.message.content, min_duration)
-}
-
-pub fn demo_candidates(transcript: &NormalizedTranscript) -> Vec<CandidateDraft> {
-    transcript
-        .segments
-        .chunks(8)
-        .take(10)
-        .enumerate()
-        .filter_map(|(index, chunk)| {
-            let first = chunk.first()?;
-            let last = chunk.last()?;
-            let duration = last.end - first.start;
-            if duration < 12.0 {
-                return None;
-            }
-
-            let end = if duration > 90.0 {
-                first.start + 90.0
-            } else {
-                last.end
-            };
-
-            Some(CandidateDraft {
-                start: first.start,
-                end,
-                score: (0.86 - (index as f64 * 0.035)).max(0.55),
-                hook: first
-                    .text
-                    .split_whitespace()
-                    .take(12)
-                    .collect::<Vec<_>>()
-                    .join(" "),
-                rationale: "Demo ranking generated without Claude. Use ANTHROPIC_API_KEY for production-quality moment detection.".to_string(),
-            })
-        })
-        .collect()
 }
 
 fn compact_segments(segments: &[TranscriptSegment]) -> String {
@@ -294,12 +477,19 @@ fn parse_candidate_json(text: &str, min_duration: f64) -> Result<Vec<CandidateDr
         .trim();
 
     let val: serde_json::Value = serde_json::from_str(trimmed).context("parsing candidate JSON")?;
-    
+
     let candidates_arr = if val.is_array() {
         val.as_array().cloned()
     } else if val.is_object() {
         let mut found_arr = None;
-        for key in &["candidates", "Candidates", "moments", "clips", "segments", "results"] {
+        for key in &[
+            "candidates",
+            "Candidates",
+            "moments",
+            "clips",
+            "segments",
+            "results",
+        ] {
             if let Some(arr) = val.get(*key).and_then(|v| v.as_array()) {
                 found_arr = Some(arr.clone());
                 break;
@@ -390,12 +580,14 @@ fn parse_candidate_json(text: &str, min_duration: f64) -> Result<Vec<CandidateDr
             score = 0.0;
         }
 
-        let hook = item.get("hook")
+        let hook = item
+            .get("hook")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
 
-        let rationale = item.get("rationale")
+        let rationale = item
+            .get("rationale")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
@@ -413,8 +605,7 @@ fn parse_candidate_json(text: &str, min_duration: f64) -> Result<Vec<CandidateDr
         .clone()
         .into_iter()
         .filter(|candidate| {
-            (candidate.end - candidate.start) >= min_duration
-                && !candidate.hook.trim().is_empty()
+            (candidate.end - candidate.start) >= min_duration && !candidate.hook.trim().is_empty()
         })
         .collect::<Vec<_>>();
 
@@ -422,8 +613,7 @@ fn parse_candidate_json(text: &str, min_duration: f64) -> Result<Vec<CandidateDr
         candidates = drafts
             .into_iter()
             .filter(|candidate| {
-                (candidate.end - candidate.start) >= 5.0
-                    && !candidate.hook.trim().is_empty()
+                (candidate.end - candidate.start) >= 5.0 && !candidate.hook.trim().is_empty()
             })
             .collect::<Vec<_>>();
     }
