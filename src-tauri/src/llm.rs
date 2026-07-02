@@ -323,7 +323,7 @@ Avoid rambling setup, context-dependent references, and pure filler. Return up t
     );
 
     let model =
-        std::env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| "claude-3-5-sonnet-latest".to_string());
+        std::env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| "claude-sonnet-5".to_string());
 
     let response = reqwest::Client::new()
         .post("https://api.anthropic.com/v1/messages")
