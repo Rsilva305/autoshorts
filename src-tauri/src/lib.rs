@@ -521,6 +521,7 @@ fn set_selected_clip_count(
 fn render_flat_clip_for_candidate(
     state: tauri::State<'_, AppState>,
     candidate_id: String,
+    caption_style: Option<String>,
 ) -> Result<String, String> {
     let (candidate, project) = state
         .db
@@ -528,8 +529,16 @@ fn render_flat_clip_for_candidate(
         .map_err(to_command_error)?;
     state
         .db
-        .update_clip_for_candidate(&candidate_id, "cutting", None, None, None)
+        .update_clip_for_candidate(&candidate_id, "cutting", None, None, None, None)
         .map_err(to_command_error)?;
+
+    // Explicit override (chosen at cut/re-cut time) wins; otherwise fall back to
+    // the project's default style set at import.
+    let resolved_style = caption_style
+        .as_deref()
+        .or(project.caption_style.as_deref())
+        .unwrap_or("modern-box")
+        .to_string();
 
     let output_path = documents_project_dir(&project)?
         .join("clips")
@@ -564,13 +573,12 @@ fn render_flat_clip_for_candidate(
             if std::fs::write(&clip_srt_path, srt_content).is_ok() {
                 srt_path = Some(clip_srt_path);
             }
-            let style = project.caption_style.as_deref().unwrap_or("modern-box");
             let drawtext = build_drawtext_filters(
                 &normalized.words,
                 candidate.start_sec,
                 candidate.end_sec,
                 cropped_width,
-                style,
+                &resolved_style,
             );
             if !drawtext.is_empty() {
                 drawtext_filters = Some(drawtext);
@@ -599,6 +607,7 @@ fn render_flat_clip_for_candidate(
                     Some(&path_string),
                     srt_string.as_deref(),
                     None,
+                    Some(&resolved_style),
                 )
                 .map_err(to_command_error)?;
             Ok(path_string)
@@ -629,6 +638,7 @@ fn render_flat_clip_for_candidate(
                             Some(&path_string),
                             srt_string.as_deref(),
                             Some(&warning_msg),
+                            None,
                         )
                         .map_err(to_command_error)?;
                     Ok(path_string)
@@ -637,7 +647,7 @@ fn render_flat_clip_for_candidate(
                     let message = retry_err.to_string();
                     state
                         .db
-                        .update_clip_for_candidate(&candidate_id, "error", None, None, Some(&message))
+                        .update_clip_for_candidate(&candidate_id, "error", None, None, Some(&message), None)
                         .map_err(to_command_error)?;
                     Err(message)
                 }

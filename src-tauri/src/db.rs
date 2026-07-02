@@ -99,6 +99,7 @@ impl Database {
         )?;
         let _ = conn.execute("ALTER TABLE projects ADD COLUMN name TEXT", []);
         let _ = conn.execute("ALTER TABLE projects ADD COLUMN caption_style TEXT", []);
+        let _ = conn.execute("ALTER TABLE clips ADD COLUMN caption_style TEXT", []);
         Ok(())
     }
 
@@ -367,6 +368,7 @@ impl Database {
         output_path: Option<&str>,
         caption_ass_path: Option<&str>,
         render_log: Option<&str>,
+        caption_style: Option<&str>,
     ) -> Result<()> {
         let conn = self.conn.lock().expect("database mutex poisoned");
         conn.execute(
@@ -374,9 +376,10 @@ impl Database {
              SET status = ?1,
                  output_path = COALESCE(?2, output_path),
                  caption_ass_path = COALESCE(?3, caption_ass_path),
-                 render_log = COALESCE(?4, render_log)
-             WHERE candidate_id = ?5",
-            params![status, output_path, caption_ass_path, render_log, candidate_id],
+                 render_log = COALESCE(?4, render_log),
+                 caption_style = COALESCE(?5, caption_style)
+             WHERE candidate_id = ?6",
+            params![status, output_path, caption_ass_path, render_log, caption_style, candidate_id],
         )?;
         Ok(())
     }
@@ -398,7 +401,7 @@ impl Database {
     fn list_clips_for_project(&self, project_id: &str) -> Result<Vec<Clip>> {
         let conn = self.conn.lock().expect("database mutex poisoned");
         let mut stmt = conn.prepare(
-            "SELECT clips.id, clips.candidate_id, clips.status, clips.output_path, clips.face_track_json, clips.caption_ass_path, clips.render_log
+            "SELECT clips.id, clips.candidate_id, clips.status, clips.output_path, clips.face_track_json, clips.caption_ass_path, clips.render_log, clips.caption_style
              FROM clips
              INNER JOIN candidates ON candidates.id = clips.candidate_id
              WHERE candidates.project_id = ?1
@@ -413,6 +416,7 @@ impl Database {
                 face_track_json: row.get(4)?,
                 caption_ass_path: row.get(5)?,
                 render_log: row.get(6)?,
+                caption_style: row.get(7)?,
             })
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()

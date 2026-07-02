@@ -8,6 +8,7 @@ import {
   BadgeCheck,
   Captions,
   Check,
+  ChevronDown,
   ChevronRight,
   Clapperboard,
   Download,
@@ -81,6 +82,7 @@ type Clip = {
   faceTrackJson: string | null;
   captionAssPath: string | null;
   renderLog: string | null;
+  captionStyle: string | null;
 };
 
 type ProjectDetail = {
@@ -111,6 +113,16 @@ type BusyState =
   | "clipCount"
   | "cut";
 
+const CAPTION_STYLES: { id: string; label: string; previewClass: string }[] = [
+  { id: "modern-box", label: "Modern Box", previewClass: "preview-text-box" },
+  { id: "classic-outline", label: "Classic Outline", previewClass: "preview-text-outline" },
+  { id: "minimal-shadow", label: "Minimal Shadow", previewClass: "preview-text-shadow" },
+  { id: "vibrant-cyan", label: "Vibrant Cyan", previewClass: "preview-text-cyan" },
+  { id: "vibrant-yellow-box", label: "Vibrant Yellow Box", previewClass: "preview-text-yellow-box" },
+  { id: "vibrant-green", label: "Vibrant Green", previewClass: "preview-text-green" },
+  { id: "vibrant-red", label: "Vibrant Red", previewClass: "preview-text-red" },
+];
+
 function App() {
   const [environment, setEnvironment] = useState<EnvironmentStatus | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -119,6 +131,8 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [renderingCandidateId, setRenderingCandidateId] = useState<string | null>(null);
+  const [clipCaptionStyles, setClipCaptionStyles] = useState<Record<string, string>>({});
+  const [openCaptionMenuFor, setOpenCaptionMenuFor] = useState<string | null>(null);
   const [showStyleModal, setShowStyleModal] = useState(false);
   const [selectedStyle, setSelectedStyle] = useState("modern-box");
   const [mediaPathToImport, setMediaPathToImport] = useState<string | null>(null);
@@ -527,13 +541,22 @@ function App() {
     });
   }
 
+  function captionStyleForCandidate(candidateId: string): string {
+    if (clipCaptionStyles[candidateId]) return clipCaptionStyles[candidateId];
+    const clip = clipByCandidate.get(candidateId);
+    return clip?.captionStyle ?? detail?.project.captionStyle ?? "modern-box";
+  }
+
   async function cutCandidate(candidateId: string) {
     if (!detail) return;
     setRenderingCandidateId(candidateId);
     setBusy("cut");
     setError(null);
     try {
-      await invoke<string>("render_flat_clip_for_candidate", { candidateId });
+      await invoke<string>("render_flat_clip_for_candidate", {
+        candidateId,
+        captionStyle: captionStyleForCandidate(candidateId),
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -550,7 +573,10 @@ function App() {
     try {
       for (const candidate of selectedCandidates) {
         setRenderingCandidateId(candidate.id);
-        await invoke<string>("render_flat_clip_for_candidate", { candidateId: candidate.id });
+        await invoke<string>("render_flat_clip_for_candidate", {
+          candidateId: candidate.id,
+          captionStyle: captionStyleForCandidate(candidate.id),
+        });
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -916,6 +942,47 @@ function App() {
                               <span className={`clip-status ${isCut ? "ready" : clip?.status === "error" ? "error" : ""}`}>
                                 {isCut ? "Cut ready" : clip?.status === "error" ? "Cut failed" : clip?.status ?? "Pending"}
                               </span>
+                              <div className="caption-style-picker">
+                                <button
+                                  type="button"
+                                  className="caption-style-trigger"
+                                  onClick={() =>
+                                    setOpenCaptionMenuFor(openCaptionMenuFor === candidate.id ? null : candidate.id)
+                                  }
+                                  disabled={busy !== "idle"}
+                                  title="Caption style for this clip"
+                                >
+                                  {CAPTION_STYLES.find((s) => s.id === captionStyleForCandidate(candidate.id))?.label}
+                                  <ChevronDown size={12} />
+                                </button>
+                                {openCaptionMenuFor === candidate.id && (
+                                  <>
+                                    <div
+                                      className="caption-style-backdrop"
+                                      onClick={() => setOpenCaptionMenuFor(null)}
+                                    />
+                                    <div className="caption-style-menu">
+                                      {CAPTION_STYLES.map((style) => (
+                                        <div
+                                          key={style.id}
+                                          className={`caption-style-option ${
+                                            captionStyleForCandidate(candidate.id) === style.id ? "active" : ""
+                                          }`}
+                                          onClick={() => {
+                                            setClipCaptionStyles((prev) => ({ ...prev, [candidate.id]: style.id }));
+                                            setOpenCaptionMenuFor(null);
+                                          }}
+                                        >
+                                          <div className="style-preview-box style-preview-box-sm">
+                                            <span className={style.previewClass}>SAMPLE TEXT</span>
+                                          </div>
+                                          <span className="caption-style-option-label">{style.label}</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </>
+                                )}
+                              </div>
                               <button
                                 className="cut-button"
                                 onClick={() => void cutCandidate(candidate.id)}

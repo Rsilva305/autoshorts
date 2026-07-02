@@ -78,6 +78,7 @@ pub struct Clip {
     pub face_track_json: Option<String>,
     pub caption_ass_path: Option<String>,
     pub render_log: Option<String>,
+    pub caption_style: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
