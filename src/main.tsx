@@ -8,7 +8,6 @@ import {
   BadgeCheck,
   Captions,
   Check,
-  ChevronDown,
   ChevronRight,
   Clapperboard,
   Download,
@@ -113,14 +112,15 @@ type BusyState =
   | "clipCount"
   | "cut";
 
-const CAPTION_STYLES: { id: string; label: string; previewClass: string }[] = [
-  { id: "modern-box", label: "Modern Box", previewClass: "preview-text-box" },
-  { id: "classic-outline", label: "Classic Outline", previewClass: "preview-text-outline" },
-  { id: "minimal-shadow", label: "Minimal Shadow", previewClass: "preview-text-shadow" },
-  { id: "vibrant-cyan", label: "Vibrant Cyan", previewClass: "preview-text-cyan" },
-  { id: "vibrant-yellow-box", label: "Vibrant Yellow Box", previewClass: "preview-text-yellow-box" },
-  { id: "vibrant-green", label: "Vibrant Green", previewClass: "preview-text-green" },
-  { id: "vibrant-red", label: "Vibrant Red", previewClass: "preview-text-red" },
+const CAPTION_STYLES: { id: string; label: string; previewClass: string | null; desc: string }[] = [
+  { id: "modern-box", label: "Modern Box", previewClass: "preview-text-box", desc: "Sleek white text inside a semi-transparent black background padding box. Highly readable." },
+  { id: "classic-outline", label: "Classic Outline", previewClass: "preview-text-outline", desc: "Vibrant bold yellow text with a clean black outline. High-energy CapCut formatting." },
+  { id: "minimal-shadow", label: "Minimal Shadow", previewClass: "preview-text-shadow", desc: "Pure white text with a soft, elegant drop shadow. Unobtrusive and modern." },
+  { id: "vibrant-cyan", label: "Vibrant Cyan", previewClass: "preview-text-cyan", desc: "Vibrant tech cyan text with a black drop shadow for a clean look." },
+  { id: "vibrant-yellow-box", label: "Vibrant Yellow Box", previewClass: "preview-text-yellow-box", desc: "Bold black text inside a solid yellow padding box. Punchy and high visibility." },
+  { id: "vibrant-green", label: "Vibrant Green", previewClass: "preview-text-green", desc: "High-energy neon green text with black borders and a drop shadow (Hormozi style)." },
+  { id: "vibrant-red", label: "Vibrant Red", previewClass: "preview-text-red", desc: "Dramatic neon crimson text with outline and drop shadow (gaming/action style)." },
+  { id: "none", label: "No Subtitles", previewClass: null, desc: "Render the clip with no burned-in captions at all." },
 ];
 
 function App() {
@@ -131,8 +131,8 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [renderingCandidateId, setRenderingCandidateId] = useState<string | null>(null);
-  const [clipCaptionStyles, setClipCaptionStyles] = useState<Record<string, string>>({});
-  const [openCaptionMenuFor, setOpenCaptionMenuFor] = useState<string | null>(null);
+  const [recutModalCandidateId, setRecutModalCandidateId] = useState<string | null>(null);
+  const [recutModalStyle, setRecutModalStyle] = useState("modern-box");
   const [showStyleModal, setShowStyleModal] = useState(false);
   const [selectedStyle, setSelectedStyle] = useState("modern-box");
   const [mediaPathToImport, setMediaPathToImport] = useState<string | null>(null);
@@ -542,21 +542,22 @@ function App() {
   }
 
   function captionStyleForCandidate(candidateId: string): string {
-    if (clipCaptionStyles[candidateId]) return clipCaptionStyles[candidateId];
     const clip = clipByCandidate.get(candidateId);
     return clip?.captionStyle ?? detail?.project.captionStyle ?? "modern-box";
   }
 
-  async function cutCandidate(candidateId: string) {
+  function openRecutModal(candidateId: string) {
+    setRecutModalStyle(captionStyleForCandidate(candidateId));
+    setRecutModalCandidateId(candidateId);
+  }
+
+  async function cutCandidate(candidateId: string, captionStyle: string) {
     if (!detail) return;
     setRenderingCandidateId(candidateId);
     setBusy("cut");
     setError(null);
     try {
-      await invoke<string>("render_flat_clip_for_candidate", {
-        candidateId,
-        captionStyle: captionStyleForCandidate(candidateId),
-      });
+      await invoke<string>("render_flat_clip_for_candidate", { candidateId, captionStyle });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -942,50 +943,14 @@ function App() {
                               <span className={`clip-status ${isCut ? "ready" : clip?.status === "error" ? "error" : ""}`}>
                                 {isCut ? "Cut ready" : clip?.status === "error" ? "Cut failed" : clip?.status ?? "Pending"}
                               </span>
-                              <div className="caption-style-picker">
-                                <button
-                                  type="button"
-                                  className="caption-style-trigger"
-                                  onClick={() =>
-                                    setOpenCaptionMenuFor(openCaptionMenuFor === candidate.id ? null : candidate.id)
-                                  }
-                                  disabled={busy !== "idle"}
-                                  title="Caption style for this clip"
-                                >
+                              {isCut && (
+                                <span className="caption-style-current">
                                   {CAPTION_STYLES.find((s) => s.id === captionStyleForCandidate(candidate.id))?.label}
-                                  <ChevronDown size={12} />
-                                </button>
-                                {openCaptionMenuFor === candidate.id && (
-                                  <>
-                                    <div
-                                      className="caption-style-backdrop"
-                                      onClick={() => setOpenCaptionMenuFor(null)}
-                                    />
-                                    <div className="caption-style-menu">
-                                      {CAPTION_STYLES.map((style) => (
-                                        <div
-                                          key={style.id}
-                                          className={`caption-style-option ${
-                                            captionStyleForCandidate(candidate.id) === style.id ? "active" : ""
-                                          }`}
-                                          onClick={() => {
-                                            setClipCaptionStyles((prev) => ({ ...prev, [candidate.id]: style.id }));
-                                            setOpenCaptionMenuFor(null);
-                                          }}
-                                        >
-                                          <div className="style-preview-box style-preview-box-sm">
-                                            <span className={style.previewClass}>SAMPLE TEXT</span>
-                                          </div>
-                                          <span className="caption-style-option-label">{style.label}</span>
-                                        </div>
-                                      ))}
-                                    </div>
-                                  </>
-                                )}
-                              </div>
+                                </span>
+                              )}
                               <button
                                 className="cut-button"
-                                onClick={() => void cutCandidate(candidate.id)}
+                                onClick={() => openRecutModal(candidate.id)}
                                 disabled={busy !== "idle" || !environment?.hasFfmpeg}
                               >
                                 {renderingCandidateId === candidate.id ? (
@@ -1177,6 +1142,52 @@ function App() {
               </button>
               <button className="btn-confirm" onClick={() => confirmImport(selectedStyle)}>
                 Confirm & Import
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {recutModalCandidateId && (
+        <div className="style-modal-overlay">
+          <div className="style-modal">
+            <div className="style-modal-header">
+              <h3>Choose Caption Style</h3>
+              <p>Pick how this clip's captions should look, or turn them off entirely.</p>
+            </div>
+
+            <div className="style-grid">
+              {CAPTION_STYLES.map((style) => (
+                <div
+                  key={style.id}
+                  className={`style-card ${recutModalStyle === style.id ? "selected" : ""}`}
+                  onClick={() => setRecutModalStyle(style.id)}
+                >
+                  <div className="style-preview-box">
+                    {style.previewClass ? (
+                      <span className={style.previewClass}>BRAINFOOD BECAUSE</span>
+                    ) : (
+                      <span className="preview-text-none">No captions</span>
+                    )}
+                  </div>
+                  <div className="style-card-title">{style.label}</div>
+                  <div className="style-card-desc">{style.desc}</div>
+                </div>
+              ))}
+            </div>
+
+            <div className="style-modal-actions">
+              <button className="btn-cancel" onClick={() => setRecutModalCandidateId(null)}>
+                Cancel
+              </button>
+              <button
+                className="btn-confirm"
+                onClick={() => {
+                  const candidateId = recutModalCandidateId;
+                  setRecutModalCandidateId(null);
+                  if (candidateId) void cutCandidate(candidateId, recutModalStyle);
+                }}
+              >
+                {clipByCandidate.get(recutModalCandidateId)?.status === "done" ? "Re-cut" : "Cut"}
               </button>
             </div>
           </div>

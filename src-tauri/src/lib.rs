@@ -573,13 +573,17 @@ fn render_flat_clip_for_candidate(
             if std::fs::write(&clip_srt_path, srt_content).is_ok() {
                 srt_path = Some(clip_srt_path);
             }
-            let drawtext = build_drawtext_filters(
-                &normalized.words,
-                candidate.start_sec,
-                candidate.end_sec,
-                cropped_width,
-                &resolved_style,
-            );
+            let drawtext = if resolved_style == "none" {
+                String::new()
+            } else {
+                build_drawtext_filters(
+                    &normalized.words,
+                    candidate.start_sec,
+                    candidate.end_sec,
+                    cropped_width,
+                    &resolved_style,
+                )
+            };
             if !drawtext.is_empty() {
                 drawtext_filters = Some(drawtext);
             }
