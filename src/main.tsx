@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { listen } from "@tauri-apps/api/event";
 import {
   AudioLines,
@@ -551,6 +552,22 @@ function App() {
     setRecutModalCandidateId(candidateId);
   }
 
+  async function revealClip(outputPath: string) {
+    try {
+      await revealItemInDir(outputPath);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function previewClip(outputPath: string) {
+    try {
+      await openPath(outputPath);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
   async function cutCandidate(candidateId: string, captionStyle: string) {
     if (!detail) return;
     setRenderingCandidateId(candidateId);
@@ -940,9 +957,23 @@ function App() {
                             <p className="candidate-rationale">{candidate.rationale}</p>
 
                             <div className="candidate-actions">
-                              <span className={`clip-status ${isCut ? "ready" : clip?.status === "error" ? "error" : ""}`}>
+                              <span
+                                className={`clip-status ${isCut ? "ready" : clip?.status === "error" ? "error" : ""}`}
+                                onClick={isCut ? () => void revealClip(clip.outputPath!) : undefined}
+                                title={isCut ? "Open file location" : undefined}
+                              >
                                 {isCut ? "Cut ready" : clip?.status === "error" ? "Cut failed" : clip?.status ?? "Pending"}
                               </span>
+                              {isCut && (
+                                <button
+                                  type="button"
+                                  className="preview-clip-button"
+                                  onClick={() => void previewClip(clip.outputPath!)}
+                                  title="Preview video"
+                                >
+                                  <Play size={12} />
+                                </button>
+                              )}
                               {isCut && (
                                 <span className="caption-style-current">
                                   {CAPTION_STYLES.find((s) => s.id === captionStyleForCandidate(candidate.id))?.label}

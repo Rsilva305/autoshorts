@@ -11,8 +11,8 @@ use tauri::{Emitter, Manager};
 
 use db::Database;
 use models::{
-    Candidate, EnvironmentStatus, MediaProbe, NormalizedTranscript, Project, ProjectDetail,
-    Transcript, TranscriptWord,
+    Candidate, CandidateDraft, EnvironmentStatus, MediaProbe, NormalizedTranscript, Project,
+    ProjectDetail, Transcript, TranscriptWord,
 };
 
 #[derive(Clone, serde::Serialize)]
@@ -420,6 +420,61 @@ fn save_demo_transcript(
     Ok(saved)
 }
 
+/// Dispatches to the selected provider. Returns the raw anyhow error (not yet
+/// stringified) so the caller can distinguish a transient JSON-parse hiccup
+/// (worth retrying) from an auth/network error (not worth retrying).
+async fn request_candidates(
+    provider: &str,
+    normalized: &NormalizedTranscript,
+    api_key: Option<&str>,
+    model_name: Option<&str>,
+) -> Result<Vec<CandidateDraft>> {
+    match provider {
+        "claude" => {
+            let key = api_key
+                .map(ToOwned::to_owned)
+                .or_else(|| std::env::var("ANTHROPIC_API_KEY").ok())
+                .ok_or_else(|| anyhow!("Set ANTHROPIC_API_KEY or supply Claude API Key to generate candidates."))?;
+            llm::detect_candidates_with_claude(normalized, &key).await
+        }
+        "local" | "ollama" => {
+            let model = model_name
+                .map(ToOwned::to_owned)
+                .or_else(|| std::env::var("OLLAMA_MODEL").ok())
+                .unwrap_or_else(|| "llama3.2".to_string());
+            llm::detect_candidates_with_local_llm(normalized, &model).await
+        }
+        "gemini" => {
+            let key = api_key
+                .map(ToOwned::to_owned)
+                .or_else(|| std::env::var("GEMINI_API_KEY").ok())
+                .ok_or_else(|| anyhow!("Set GEMINI_API_KEY or supply Gemini API Key to generate candidates."))?;
+            llm::detect_candidates_with_gemini(normalized, &key).await
+        }
+        "openai" => {
+            let key = api_key
+                .map(ToOwned::to_owned)
+                .or_else(|| std::env::var("OPENAI_API_KEY").ok())
+                .ok_or_else(|| anyhow!("Set OPENAI_API_KEY or supply OpenAI API Key to generate candidates."))?;
+            llm::detect_candidates_with_openai(normalized, &key).await
+        }
+        "openrouter" => {
+            let key = api_key
+                .map(ToOwned::to_owned)
+                .or_else(|| std::env::var("OPENROUTER_API_KEY").ok())
+                .ok_or_else(|| anyhow!("Set OPENROUTER_API_KEY or supply OpenRouter API Key to generate candidates."))?;
+            llm::detect_candidates_with_openrouter(normalized, &key).await
+        }
+        _ => {
+            let key = api_key
+                .map(ToOwned::to_owned)
+                .or_else(|| std::env::var("DEEPSEEK_API_KEY").ok())
+                .ok_or_else(|| anyhow!("Set DEEPSEEK_API_KEY or supply DeepSeek API Key to generate candidates."))?;
+            llm::detect_candidates_with_deepseek(normalized, &key).await
+        }
+    }
+}
+
 #[tauri::command]
 async fn generate_candidates(
     state: tauri::State<'_, AppState>,
@@ -442,56 +497,27 @@ async fn generate_candidates(
         .unwrap_or_else(|| "deepseek".to_string())
         .to_lowercase();
 
-    let drafts = match active_provider.as_str() {
-        "claude" => {
-            let key = api_key
-                .or_else(|| std::env::var("ANTHROPIC_API_KEY").ok())
-                .ok_or_else(|| "Set ANTHROPIC_API_KEY or supply Claude API Key to generate candidates.".to_string())?;
-            llm::detect_candidates_with_claude(&normalized, &key)
-                .await
-                .map_err(to_command_error)?
+    // The LLM occasionally returns text that isn't valid JSON (truncated mid-response,
+    // stray prose, an unescaped character in a string field) - a transient hiccup, not
+    // a config problem. Retry a couple of times before surfacing it to the user.
+    const MAX_ATTEMPTS: u32 = 3;
+    let mut drafts = Vec::new();
+    for attempt in 1..=MAX_ATTEMPTS {
+        match request_candidates(&active_provider, &normalized, api_key.as_deref(), model_name.as_deref()).await {
+            Ok(result) => {
+                drafts = result;
+                break;
+            }
+            Err(err) => {
+                let is_parse_error = err.to_string().contains("parsing candidate JSON");
+                if is_parse_error && attempt < MAX_ATTEMPTS {
+                    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+                    continue;
+                }
+                return Err(to_command_error(err));
+            }
         }
-        "local" | "ollama" => {
-            let model = model_name
-                .or_else(|| std::env::var("OLLAMA_MODEL").ok())
-                .unwrap_or_else(|| "llama3.2".to_string());
-            llm::detect_candidates_with_local_llm(&normalized, &model)
-                .await
-                .map_err(to_command_error)?
-        }
-        "gemini" => {
-            let key = api_key
-                .or_else(|| std::env::var("GEMINI_API_KEY").ok())
-                .ok_or_else(|| "Set GEMINI_API_KEY or supply Gemini API Key to generate candidates.".to_string())?;
-            llm::detect_candidates_with_gemini(&normalized, &key)
-                .await
-                .map_err(to_command_error)?
-        }
-        "openai" => {
-            let key = api_key
-                .or_else(|| std::env::var("OPENAI_API_KEY").ok())
-                .ok_or_else(|| "Set OPENAI_API_KEY or supply OpenAI API Key to generate candidates.".to_string())?;
-            llm::detect_candidates_with_openai(&normalized, &key)
-                .await
-                .map_err(to_command_error)?
-        }
-        "openrouter" => {
-            let key = api_key
-                .or_else(|| std::env::var("OPENROUTER_API_KEY").ok())
-                .ok_or_else(|| "Set OPENROUTER_API_KEY or supply OpenRouter API Key to generate candidates.".to_string())?;
-            llm::detect_candidates_with_openrouter(&normalized, &key)
-                .await
-                .map_err(to_command_error)?
-        }
-        _ => {
-            let key = api_key
-                .or_else(|| std::env::var("DEEPSEEK_API_KEY").ok())
-                .ok_or_else(|| "Set DEEPSEEK_API_KEY or supply DeepSeek API Key to generate candidates.".to_string())?;
-            llm::detect_candidates_with_deepseek(&normalized, &key)
-                .await
-                .map_err(to_command_error)?
-        }
-    };
+    }
 
     if drafts.is_empty() {
         return Err("No viable clip candidates were returned for this transcript.".to_string());
@@ -679,6 +705,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let data_dir = app
                 .path()

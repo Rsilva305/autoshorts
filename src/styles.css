@@ -683,6 +683,28 @@ button:disabled {
   color: var(--color-success-text);
   background: var(--color-success-bg);
   border-color: var(--color-success-border);
+  cursor: pointer;
+}
+
+.clip-status.ready:hover {
+  border-color: var(--accent-primary);
+}
+
+.preview-clip-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+}
+
+.preview-clip-button:hover {
+  color: var(--accent-primary);
+  border-color: var(--accent-primary);
 }
 
 .clip-status.error {
